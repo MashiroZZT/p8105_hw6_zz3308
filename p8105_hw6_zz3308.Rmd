@@ -152,14 +152,95 @@ The plot illustrates the adjusted odds ratios (ORs) for resolving homicides invo
 # Problem 3
 
 ```{r}
+birthweight_data <- read.csv("data/birthweight.csv") %>% janitor::clean_names()
 
+birthweight_data <- birthweight_data %>%
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+    frace = factor(frace, 
+                   levels = c(1, 2, 3, 4, 8, 9),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, 
+                   levels = c(1, 2, 3, 4, 8),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform,
+                     levels = c(0, 1),
+                     labels = c("absent", "present"))) %>%
+  drop_na()
 ```
 
+```{r}
+proposed_model <- lm(
+  bwt ~ blength + bhead + gaweeks + wtgain + ppbmi + delwt + malform,
+  data = birthweight_data
+)
 
+birthweight_data <- birthweight_data %>%
+  add_predictions(proposed_model) %>%
+  add_residuals(proposed_model)
 
+ggplot(birthweight_data, aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(se = FALSE, color = "blue") +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted Values",
+    y = "Residuals"
+  ) +
+  theme_minimal()
+```
 
+I choose Hypothesis-Driven Selection, I started by identifying key variables likely to influence birthweight (`bwt`) based on domain knowledge and biological plausibility. These include:
 
+Baby Characteristics: `blength` (baby’s length) and `bhead` (head circumference) are direct indicators of fetal size./
+Pregnancy-Related Factors: `gaweeks` (gestational age) strongly correlates with birthweight, as longer gestation generally allows more growth./
+Maternal Health: `wtgain` (weight gain during pregnancy) and `delwt` (weight at delivery) reflect maternal health and nutrition, including `malform`, which are critical for fetal growth./
+Maternal Pre-pregnancy Condition: `ppbmi` (pre-pregnancy BMI) serves as a baseline indicator of the mother's health and nutritional status.
 
+The residual plot shows residuals scattered around zero, indicating no major violations of linearity. However, there is a slight curve in the residuals, particularly at lower fitted values, suggesting some potential non-linearity in the model. Additionally, the spread of residuals appears relatively consistent, with no strong evidence of heteroscedasticity.
+
+```{r}
+model1 <- lm(bwt ~ blength + gaweeks, data = birthweight_data)
+
+model2 <- lm(bwt ~ bhead * blength * babysex, data = birthweight_data)
+```
+
+```{r}
+set.seed(123)
+
+cv_df <- birthweight_data %>% 
+  crossv_mc(100) %>%
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) %>%
+  mutate(
+    proposed_model = map(train, \(df) lm(bwt ~ blength + bhead + gaweeks + wtgain + ppbmi + delwt + malform, data = df)),
+    model1 = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    model2 = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df))
+  ) %>%
+  mutate(
+    rmse_proposed = map2_dbl(proposed_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse1 = map2_dbl(model1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse2 = map2_dbl(model2, test, \(mod, df) rmse(model = mod, data = df)))
+
+cv_df %>% 
+  select(starts_with("rmse")) %>%
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin() +
+  labs(
+    title = "rmse comparison of models",
+    x = "model",
+    y = "rmse"
+  )
+```
+
+The violin plot shows that the Proposed Model performs best, with the lowest median RMSE and the most consistent results across cross-validation splits. Model 2 (`bhead` * `blength` * `babysex`) performs better on average than Model 1 (`blength` + `gaweeks`), as it has a lower median RMSE, but its wider spread indicates higher variability. Model 1 is more stable but slightly less accurate on average. Overall, the Proposed Model outperforms both alternatives in accuracy and reliability.
 
 
 
